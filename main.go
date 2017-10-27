@@ -2,49 +2,26 @@ package main
 
 import (
 	//"errors"
-	"time"
 	"fmt"
+	"os"
+	"path/filepath"
 
+	log "github.com/Sirupsen/logrus"
+	vault "github.com/hashicorp/vault/api"
+	"gopkg.in/alecthomas/kingpin.v2"
+	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
-	//"k8s.io/apimachinery/pkg/api/errors"
-	log "github.com/Sirupsen/logrus"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/util/retry"
-	"k8s.io/client-go/pkg/api/v1"
-	"k8s.io/client-go/pkg/fields"
-	vault "github.com/hashicorp/vault/api"
 )
 
-var policytemplate = `
-{
-	"path": {
-		"%[1]s/%[2]s/%[3]s/": {
-			"capabilities": [
-		  		"list"
-			]
-	  	},
-	  	"%[1]s/%[2]s/%[3]s": {
-			"capabilities": [
-		  		"read"
-			]
-	  	}
-	}
-}
-`
-
-var KVMOUNT = "osenp"
-
 var globals struct {
-	clientset *kubernetes.Clientset
-	podsStore cache.Store
+	clientset   *kubernetes.Clientset
 	vaultclient *vault.Client
 }
 
 func podCreated(obj interface{}) {
-	pod := obj.(*v1.Pod)
-	
+	pod := obj.(*apiv1.Pod)
+
 	if _, ok := pod.GetAnnotations()["mlctech.io/vault-token"]; ok {
 		log.Infof("pod '%s' already annotated", pod.Name)
 		return
@@ -53,150 +30,94 @@ func podCreated(obj interface{}) {
 	if dc, ok := pod.GetAnnotations()["openshift.io/deployment-config.name"]; ok {
 		log.Infof("pod '%s' from DeploymentConfig '%s' created", pod.Name, dc)
 
-		data := make(map[string]interface{})
-		policy := fmt.Sprintf(policytemplate, KVMOUNT, pod.Namespace, dc)
-		data["rules"] = policy
-
-		policyname := fmt.Sprintf("%s-%s-%s", KVMOUNT, pod.Namespace, dc)
-
-		log.Infof("creating vault policy '%s'", policyname)
-		err := globals.vaultclient.Sys().PutPolicy(policyname, policy)
-		//err := globals.vaultclient.Logical().Write(policypath, data)
-		//r := globals.vaultclient.NewRequest()
+		policyname, err := createVaultStandardPolicy(globals.vaultclient, *vaultMount, pod.Namespace, dc)
 		if err != nil {
-			log.Errorf("failed to create vault policy: %v.", err)
-			return
+			log.Warnf("failed to create standard vault policy: %v.", err)
 		}
-		log.Infof("vault policy created")
 
 		tokenname := fmt.Sprintf("%s-%s", policyname, pod.Name)
-		log.Infof("creating wrapped vault token '%s'", tokenname)
-		cr := &vault.TokenCreateRequest{
-			Policies:        []string{"default", policyname},
-			NoParent:        true,
-			NoDefaultPolicy: false,
-			DisplayName:     tokenname,
-		}
+		tokenpolicies := []string{policyname}
 
-
-		tk, err := globals.vaultclient.Auth().Token().CreateOrphan(cr)
+		tk, err := createVaultOrphanToken(globals.vaultclient, tokenname, tokenpolicies)
 		if err != nil {
 			log.Errorf("failed to create vault token: %v.", err)
 			return
 		}
-		log.Infof("got token accessor '%vs", tk.Auth.Accessor)
 
-		log.Infof("annotating pod '%s'", pod.Name)
-		annotations := pod.GetAnnotations()
-		annotations["mlctech.io/vault-token"] = tk.Auth.ClientToken
-		pod.SetAnnotations(annotations)
+		applyUpdate := func(updpod *apiv1.Pod, value string) {
+			if updpod.Annotations == nil {
+				updpod.Annotations = map[string]string{}
+			}
+			updpod.Annotations["mlctech.io/vault-token"] = value
+		}
 
-		apod := pod
-		err = retry.RetryOnConflict(retry.DefaultBackoff, func() (err error) {
-			apod, err = globals.clientset.Pods(pod.Namespace).Update(apod)
-			return
-		})
-		if err != nil {
+		log.Infof("annotating pod '%vs", pod.Name)
+		if pod, err = updatePodWithRetries(pod.Namespace, pod, tk.Auth.ClientToken, applyUpdate); err != nil {
 			log.Errorf("failed to annotate pod. %v.", err)
 			return
 		}
 
-		
-		// for {
-		// _, err = globals.clientset.Pods(pod.Namespace).Update(apod);
-		// if errors.IsConflict(err) {
-		// 	// Deployment is modified in the meanwhile, query the latest version
-		// 	// and modify the retrieved object.
-		// 	log.Warnf("encountered conflict, retrying")
-		// 	apod, err := globals.clientset.Pods(apod.Namespace).Get(apod.Name)
-		// 	if err != nil {
-		// 		panic(fmt.Errorf("get failed: %+v", err))
-		// 	}
-		// } else if err != nil {
-		// 	log.Errorf("failed to annotate pod. %v.", err)
-		// 	return
-		// } else {
-		// 	break
-		// }
-		// }
 	} else {
 		log.Debugf("pod '%s' not part of a deploymentConfig, skipping.", pod.Name)
 	}
-	
+
 }
 
-func podDeleted(obj interface{}) {
-    pod := obj.(*v1.Pod)
-    fmt.Println("Pod deleted: "+pod.ObjectMeta.Name)
+func homeDir() string {
+	if h := os.Getenv("HOME"); h != "" {
+		return h
+	}
+	return os.Getenv("USERPROFILE") // windows
 }
 
-func watchPods(store cache.Store) cache.Store {
-	//Define what we want to look for (Pods)
-	watchlist := cache.NewListWatchFromClient(globals.clientset.Core().RESTClient(), "pods", v1.NamespaceAll, fields.Everything())
+// This variables are set by linker flags externally
+var (
+	Version = "unknown"
+	Build   = "dev"
+)
 
-	resyncPeriod := 30 * time.Minute
-
-	//Setup an informer to call functions when the watchlist changes
-	eStore, eController := cache.NewInformer(
-		watchlist,
-		&v1.Pod{},
-		resyncPeriod,
-		cache.ResourceEventHandlerFuncs{
-			AddFunc:    podCreated,
-			DeleteFunc: podDeleted,
-		},
-	)
-
-	//Run the controller as a goroutine
-	stop := make(chan struct{})
-	go eController.Run(stop)
-	return eStore
-}
+// CLI Configuration
+var (
+	loglevel     = kingpin.Flag("loglevel", "Set logging level.").Short('l').Default("info").Enum("debug", "info", "warn", "crit", "panic")
+	incluster    = kingpin.Flag("incluster", "Enable if program is being run inside kubernetes/openshift").Short('i').Bool()
+	vaultMount   = kingpin.Flag("vaultpath", "Path on vault filesystem where secrets are located").Short('p').Required().OverrideDefaultFromEnvar("VAULTPATH").String()
+	kubeconfig   = kingpin.Flag("kubeconfig", "Absolute path to the kubeconfig file").Default(filepath.Join(homeDir(), ".kube", "config")).String()
+	selectednode = kingpin.Flag("node", "Only act on pods scheduled on the specificed kubernetes node").Short('n').OverrideDefaultFromEnvar("NODESELECTOR").String()
+)
 
 func main() {
+	var err error
 
-	vc, err := vault.NewClient(vault.DefaultConfig())
+	kingpin.Version(fmt.Sprintf("%s-%s", Version, Build))
+	kingpin.Parse()
+
+	// Configure logging
+	ll, _ := log.ParseLevel(*loglevel)
+	log.SetLevel(ll)
+
+	globals.vaultclient, err = newAuthenticatedVaultClient()
 	if err != nil {
-		log.Errorf("failed to create vault client: %v.", err)
-		panic(err)
+		log.Fatalf("failed to create authenticated vault client: %v.", err)
+		os.Exit(-1)
 	}
 
-	vtself, err := vc.Auth().Token().LookupSelf()
-	if err != nil {
-		log.Errorf("failed to verify vault token: %v.", err)
-		panic(err)
-	}
-	log.Infof("Authenticated with token accessor %s", vtself.Data["accessor"])
-
-	globals.vaultclient = vc
-
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		log.Warnf("failed to create in-cluster client: %v.", err)
-		config, err = clientcmd.BuildConfigFromFlags("", "/Users/msessa/.kube/config")
+	if *incluster {
+		globals.clientset, err = newAuthenticatedKubeInClusterClient()
 		if err != nil {
-			log.Warnf("failed to create kubeconfig client: %v.", err)
+			log.Fatalf("failed to create authenticated kubernetes in-cluster client: %v.", err)
+			os.Exit(-1)
+		}
+	} else {
+		globals.clientset, err = newAuthenticatedKubeClient(*kubeconfig)
+		if err != nil {
+			log.Fatalf("failed to create authenticated kubernetes client: %v.", err)
+			os.Exit(-1)
 		}
 	}
-	log.Info("connecting to kubernetes api: ", config.Host)
-	globals.clientset, err = kubernetes.NewForConfig(config)
-	if err != nil {
-		panic(err)
-	}
-
-
-
-	version, err := globals.clientset.ServerVersion()
-	if err != nil {
-		panic(err)
-	}
-	log.Infof("successfully connected to kubernetes api %s", version.String())
 
 	//Create a cache to store Pods
-	
+	var podsStore cache.Store
+	podsStore = watchForNewPods(globals.clientset, podsStore, *selectednode)
+	select {}
 
-	globals.podsStore = watchPods(globals.podsStore)
-	select{ }
-
-	
 }
