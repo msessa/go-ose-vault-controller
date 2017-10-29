@@ -18,7 +18,7 @@ SRC = $(shell find . -type f -name '*.go' -not -path "./vendor/*")
 
 all: build
 
-$(TARGET): $(SRC) deps
+$(TARGET): $(SRC) vendor/
 	@go build $(LDFLAGS) -o $(TARGET)
 
 deptool:
