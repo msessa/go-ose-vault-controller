@@ -8,23 +8,38 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-func newAuthenticatedVaultClient() (*api.Client, error) {
+func newAuthenticatedVaultClient() (*api.Client, *api.Renewer, error) {
 	// TODO: authentication
 
 	config := api.DefaultConfig()
 	log.Debugf("connecting to vault api: %s", config.Address)
 	c, err := api.NewClient(config)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	self, err := c.Auth().Token().LookupSelf()
+	lookup, err := c.Auth().Token().LookupSelf()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	log.Infof("authenticated to vault with token accessor %s", self.Data["accessor"])
+	log.Infof("authenticated to vault with token accessor %s", lookup.Data["accessor"])
 
-	return c, err
+	if lookup.Data["renewable"].(bool) {
+		log.Debugf("token is renewable. setting up renewer")
+		// Token is renewable
+		self, err := c.Auth().Token().RenewSelf(0)
+		if err != nil {
+			return nil, nil, err
+		}
+		renewer, err := c.NewRenewer(&api.RenewerInput{
+			Secret: self,
+		})
+		go renewer.Renew()
+		log.Infof("token renewer active")
+		return c, renewer, nil
+	}
+
+	return c, nil, nil
 }
 
 func newAuthenticatedKubeInClusterClient() (*kubernetes.Clientset, error) {

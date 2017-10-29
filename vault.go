@@ -7,21 +7,22 @@ import (
 	vault "github.com/hashicorp/vault/api"
 )
 
-func createVaultStandardPolicy(client *vault.Client, vaultpath string, namespace string, deploymentConfig string) (string, error) {
+func createVaultStandardPolicy(client *vault.Client, vaultpath string, namespace string, deploymentConfig string) (string, string, error) {
 	policyname := fmt.Sprintf("%s-%s-%s", vaultpath, namespace, deploymentConfig)
+	policybasepath := fmt.Sprintf("%s/%s/%s", vaultpath, namespace, deploymentConfig)
 	policyrules := fmt.Sprintf(policytemplate, vaultpath, namespace, deploymentConfig)
 
 	if _, err := client.Sys().GetPolicy(policyname); err != nil {
 		log.Debugf("creating standrd vault policy: %s", policyname)
 		err := client.Sys().PutPolicy(policyname, policyrules)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		log.Infof("created standard vault policy %s", policyname)
 	} else {
 		log.Debug("vault standard policy already exists, skipping")
 	}
-	return policyname, nil
+	return policyname, policybasepath, nil
 }
 
 func createVaultOrphanToken(client *vault.Client, tokenName string, policies []string) (*vault.Secret, error) {

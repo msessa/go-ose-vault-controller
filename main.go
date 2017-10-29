@@ -30,7 +30,7 @@ func podCreated(obj interface{}) {
 	if dc, ok := pod.GetAnnotations()["openshift.io/deployment-config.name"]; ok {
 		log.Infof("pod '%s' from DeploymentConfig '%s' created", pod.Name, dc)
 
-		policyname, err := createVaultStandardPolicy(globals.vaultclient, *vaultMount, pod.Namespace, dc)
+		policyname, policypath, err := createVaultStandardPolicy(globals.vaultclient, *vaultMount, pod.Namespace, dc)
 		if err != nil {
 			log.Warnf("failed to create standard vault policy: %v.", err)
 		}
@@ -49,6 +49,7 @@ func podCreated(obj interface{}) {
 				updpod.Annotations = map[string]string{}
 			}
 			updpod.Annotations["mlctech.io/vault-token"] = value
+			updpod.Annotations["mlctech.io/vault-token-path"] = policypath
 		}
 
 		log.Infof("annotating pod '%vs", pod.Name)
@@ -95,11 +96,13 @@ func main() {
 	ll, _ := log.ParseLevel(*loglevel)
 	log.SetLevel(ll)
 
-	globals.vaultclient, err = newAuthenticatedVaultClient()
+	vaultclient, renewer, err := newAuthenticatedVaultClient()
 	if err != nil {
 		log.Fatalf("failed to create authenticated vault client: %v.", err)
 		os.Exit(-1)
 	}
+	globals.vaultclient = vaultclient
+	defer renewer.Stop()
 
 	if *incluster {
 		globals.clientset, err = newAuthenticatedKubeInClusterClient()
@@ -117,7 +120,22 @@ func main() {
 
 	//Create a cache to store Pods
 	var podsStore cache.Store
+
 	podsStore = watchForNewPods(globals.clientset, podsStore, *selectednode)
-	select {}
+
+	// Loop forever
+	for {
+		select {
+		case err := <-renewer.DoneCh():
+			if err != nil {
+				log.Fatalf("vault token cannot be further renewed. exiting", err)
+				break
+			}
+
+			// Renewal is now over
+		case renewal := <-renewer.RenewCh():
+			log.Debugf("Successfully renewed: %#v", renewal)
+		}
+	}
 
 }
