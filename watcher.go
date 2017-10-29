@@ -3,6 +3,7 @@ package main
 import (
 	"time"
 
+	log "github.com/Sirupsen/logrus"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -13,8 +14,10 @@ import (
 
 func watchForNewPods(client *kubernetes.Clientset, store cache.Store, selectednode string) cache.Store {
 
+	// Sets up a filter for pods running on the node specified by the 'node' flag
 	var selector = fields.Everything()
 	if selectednode != "" {
+		log.Debugf("node selector enabled. limiting actions to pods on node %v", selectednode)
 		selector = fields.Set{"spec.nodeName": selectednode}.AsSelector()
 	}
 

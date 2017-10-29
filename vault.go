@@ -12,7 +12,7 @@ func createVaultStandardPolicy(client *vault.Client, vaultpath string, namespace
 	policybasepath := fmt.Sprintf("%s/%s/%s", vaultpath, namespace, deploymentConfig)
 	policyrules := fmt.Sprintf(policytemplate, vaultpath, namespace, deploymentConfig)
 
-	if _, err := client.Sys().GetPolicy(policyname); err != nil {
+	if policycontent, err := client.Sys().GetPolicy(policyname); err != nil || policycontent == "" {
 		log.Debugf("creating standrd vault policy: %s", policyname)
 		err := client.Sys().PutPolicy(policyname, policyrules)
 		if err != nil {

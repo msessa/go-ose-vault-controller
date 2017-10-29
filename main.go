@@ -128,7 +128,7 @@ func main() {
 		select {
 		case err := <-renewer.DoneCh():
 			if err != nil {
-				log.Fatalf("vault token cannot be further renewed. exiting", err)
+				log.Fatalf("vault token cannot be further renewed. %v. exiting", err)
 				break
 			}
 
