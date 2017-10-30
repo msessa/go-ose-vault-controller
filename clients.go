@@ -22,7 +22,10 @@ func newAuthenticatedVaultClient(tlscert string, tlskey string, pkiauthpath stri
 			ClientCert: tlscert,
 			ClientKey:  tlskey,
 		}
-		config.ConfigureTLS(&tlsconfig)
+		err := config.ConfigureTLS(&tlsconfig)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	c, err := api.NewClient(config)
