@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+
 	log "github.com/Sirupsen/logrus"
 	"github.com/hashicorp/vault/api"
 	"k8s.io/client-go/kubernetes"
@@ -8,14 +10,34 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-func newAuthenticatedVaultClient() (*api.Client, *api.Renewer, error) {
+func newAuthenticatedVaultClient(tlscert string, tlskey string, pkiauthpath string) (*api.Client, *api.Renewer, error) {
 	// TODO: authentication
 
 	config := api.DefaultConfig()
 	log.Debugf("connecting to vault api: %s", config.Address)
+
+	// Configure TLS client authentication
+	if tlscert != "" && tlskey != "" {
+		tlsconfig := api.TLSConfig{
+			ClientCert: tlscert,
+			ClientKey:  tlskey,
+		}
+		config.ConfigureTLS(&tlsconfig)
+	}
+
 	c, err := api.NewClient(config)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	if tlscert != "" && tlskey != "" && c.Token() == "" {
+		// Attempts TLS client authentication
+		log.Debugf("Authenticating with TLS client certificate to vault backend %s", pkiauthpath)
+		ctok, err := c.Logical().Write(fmt.Sprintf("%s/login", pkiauthpath), nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		c.SetToken(ctok.Auth.ClientToken)
 	}
 
 	lookup, err := c.Auth().Token().LookupSelf()

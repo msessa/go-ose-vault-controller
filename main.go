@@ -98,6 +98,9 @@ var (
 	vaultMount   = kingpin.Flag("vaultpath", "Path on vault filesystem where secrets are located").Short('p').Required().OverrideDefaultFromEnvar("VAULTPATH").String()
 	kubeconfig   = kingpin.Flag("kubeconfig", "Absolute path to the kubeconfig file").Default(filepath.Join(homeDir(), ".kube", "config")).String()
 	selectednode = kingpin.Flag("node", "Only act on pods scheduled on the specificed kubernetes node").Short('n').OverrideDefaultFromEnvar("NODESELECTOR").String()
+	tlscert      = kingpin.Flag("tlscert", "TLS Client Certificate file for authentication").OverrideDefaultFromEnvar("TLSCERT").ExistingFile()
+	tlskey       = kingpin.Flag("tlskey", "TLS Client Key file for authentication").OverrideDefaultFromEnvar("TLSKEY").ExistingFile()
+	pkiauthpath  = kingpin.Flag("pkiauthpath", "Path of the PKI authentication backend on vault").Default("auth/cert").String()
 )
 
 func main() {
@@ -110,7 +113,7 @@ func main() {
 	ll, _ := log.ParseLevel(*loglevel)
 	log.SetLevel(ll)
 
-	vaultclient, renewer, err := newAuthenticatedVaultClient()
+	vaultclient, renewer, err := newAuthenticatedVaultClient(*tlscert, *tlskey, *pkiauthpath)
 	if err != nil {
 		log.Fatalf("failed to create authenticated vault client: %v.", err)
 		os.Exit(-1)
