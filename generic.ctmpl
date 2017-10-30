@@ -1,20 +1,32 @@
-{{- executeTemplate "logic" | trimSpace -}}
-{{ define "logic" }}
 {{ with secret (env "VAULT_DC_SECRET_PATH") }}
-{{ if .Data._ }}
-{{ executeTemplate "base64" . | trimSpace }}
-{{ else }}
-{{ executeTemplate "basic_kv" . | trimSpace }}
-{{ end }}
-{{ end }}
-{{ end -}}
-{{ define "basic_kv" }}
-{{ range $k, $v := .Data -}}
-{{ if ne $k "ttl" -}}
+{{- range $item := .Data }}
+{{- executeTemplate "logic" $item | trimSpace -}}
+{{ end }}{{/* end range */}}
+{{ end }}{{/* end with secret */}}
+{{- define "java_properties" }}
+{{ range $k, $v := . -}}
 {{ $k }}={{ $v }}
-{{- end }}
+{{ end }}{{/* end range */}}
+{{ end }}{{/* end define java_properties */}}
+{{- define "yaml" }}
+{{ . | toYAML }}
+{{ end }}{{/* end define yaml */}}
+{{- define "json" }}
+{{ . | toJSONPretty }}
+{{ end }}{{/* end define json */}}
+{{- define "logic" }}
+{{ scratch.Set "foo" .destination }}
+{{ if eq .type "kv" }}
+{{ if .template }}
+{{ executeTemplate .template .contents }}
+{{ else }}
+#### !!! SECRET DOES NOT SPECIFY A TEMPLATE !!! ###
+{{ end }}{{/* end if template */}}
+{{ else }}
+{{ if eq .type "base64" }}
+{{ .contents | base64Decode }}
+{{ else }}{{/* default case */}}
+{{ .contents }}
+{{ end }}{{/* end if base64 */}}
+{{ end }}{{/* end if kv */}}
 {{ end }}
-{{ end }}
-{{ define "base64" }}
-{{ base64Decode .Data._ }}
-{{ end -}}
