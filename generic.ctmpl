@@ -1,0 +1,20 @@
+{{- executeTemplate "logic" | trimSpace -}}
+{{ define "logic" }}
+{{ with secret (env "VAULT_DC_SECRET_PATH") }}
+{{ if .Data._ }}
+{{ executeTemplate "base64" . | trimSpace }}
+{{ else }}
+{{ executeTemplate "basic_kv" . | trimSpace }}
+{{ end }}
+{{ end }}
+{{ end -}}
+{{ define "basic_kv" }}
+{{ range $k, $v := .Data -}}
+{{ if ne $k "ttl" -}}
+{{ $k }}={{ $v }}
+{{- end }}
+{{ end }}
+{{ end }}
+{{ define "base64" }}
+{{ base64Decode .Data._ }}
+{{ end -}}
