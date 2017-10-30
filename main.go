@@ -22,7 +22,7 @@ var globals struct {
 func podCreated(obj interface{}) {
 	pod := obj.(*apiv1.Pod)
 
-	if _, ok := pod.GetAnnotations()["mlctech.io/vault-token"]; ok {
+	if _, ok := pod.GetAnnotations()["mlctech.io/vault-initialized"]; ok {
 		log.Infof("pod '%s' already annotated", pod.Name)
 		return
 	}
@@ -30,30 +30,44 @@ func podCreated(obj interface{}) {
 	if dc, ok := pod.GetAnnotations()["openshift.io/deployment-config.name"]; ok {
 		log.Infof("pod '%s' from DeploymentConfig '%s' created", pod.Name, dc)
 
-		policyname, policypath, err := createVaultStandardPolicy(globals.vaultclient, *vaultMount, pod.Namespace, dc)
+		policyname, _, err := createVaultStandardPolicy(globals.vaultclient, *vaultMount, pod.Namespace, dc)
 		if err != nil {
 			log.Warnf("failed to create standard vault policy: %v.", err)
 		}
 
-		tokenname := fmt.Sprintf("%s-%s", policyname, pod.Name)
+		// tokenname := fmt.Sprintf("%s-%s", policyname, pod.Name)
 		tokenpolicies := []string{policyname}
 
-		tk, err := createVaultOrphanToken(globals.vaultclient, tokenname, tokenpolicies)
+		// tk, err := createVaultOrphanToken(globals.vaultclient, tokenname, tokenpolicies)
+		// if err != nil {
+		// 	log.Errorf("failed to create vault token: %v.", err)
+		// 	return
+		// }
+
+		// applyUpdate := func(updpod *apiv1.Pod, value string) {
+		// 	if updpod.Annotations == nil {
+		// 		updpod.Annotations = map[string]string{}
+		// 	}
+		// 	updpod.Annotations["mlctech.io/vault-token"] = value
+		// 	updpod.Annotations["mlctech.io/vault-token-path"] = policypath
+		// }
+		roleID, secretID, err := createVaultAppRole(globals.vaultclient, fmt.Sprintf("%s-%s-%s", *vaultMount, pod.Namespace, dc), tokenpolicies)
 		if err != nil {
-			log.Errorf("failed to create vault token: %v.", err)
+			log.Errorf("failed to create vault approle: %v.", err)
 			return
 		}
 
-		applyUpdate := func(updpod *apiv1.Pod, value string) {
+		applyUpdate := func(updpod *apiv1.Pod, roleID string, secretID string) {
 			if updpod.Annotations == nil {
 				updpod.Annotations = map[string]string{}
 			}
-			updpod.Annotations["mlctech.io/vault-token"] = value
-			updpod.Annotations["mlctech.io/vault-token-path"] = policypath
+			updpod.Annotations["mlctech.io/vault-role-id"] = roleID
+			updpod.Annotations["mlctech.io/vault-secret-id"] = secretID
+			updpod.Annotations["mlctech.io/vault-initialized"] = "true"
 		}
 
 		log.Infof("annotating pod '%vs", pod.Name)
-		if pod, err = updatePodWithRetries(pod.Namespace, pod, tk.Auth.ClientToken, applyUpdate); err != nil {
+		if pod, err = updatePodWithRetries(pod.Namespace, pod, roleID, secretID, applyUpdate); err != nil {
 			log.Errorf("failed to annotate pod. %v.", err)
 			return
 		}
