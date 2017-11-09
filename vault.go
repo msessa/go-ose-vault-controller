@@ -1,17 +1,45 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"html/template"
 	"strings"
 
 	log "github.com/Sirupsen/logrus"
 	vault "github.com/hashicorp/vault/api"
+	apiv1 "k8s.io/api/core/v1"
 )
 
-func createVaultStandardPolicy(client *vault.Client, vaultpath string, namespace string, deploymentConfig string) (string, string, error) {
-	policyname := fmt.Sprintf("%s-%s-%s", vaultpath, namespace, deploymentConfig)
-	policybasepath := fmt.Sprintf("%s/%s/%s", vaultpath, namespace, deploymentConfig)
-	policyrules := fmt.Sprintf(policytemplate, vaultpath, namespace, deploymentConfig)
+type TemplateContext struct {
+	Annotations map[string]string
+	Labels      map[string]string
+	Pod         apiv1.Pod
+	Mountpoint  string
+	Basepath    string
+}
+
+func createVaultStandardPolicy(client *vault.Client, vaultpath string, pod *apiv1.Pod) (string, string, error) {
+	deploymentConfig := pod.GetAnnotations()["openshift.io/deployment-config.name"]
+	policyname := fmt.Sprintf("%s-%s-%s", vaultpath, pod.Namespace, deploymentConfig)
+	policybasepath := fmt.Sprintf("%s/transit/decrypt/%s-%s-%s", vaultpath, vaultpath, pod.Namespace, deploymentConfig)
+
+	context := TemplateContext{
+		Annotations: pod.GetAnnotations(),
+		Labels:      pod.GetLabels(),
+		Pod:         *pod,
+		Mountpoint:  vaultpath,
+		Basepath:    policybasepath,
+	}
+	// TODO: Cleanup
+	tmpl, err := template.New("test").Parse(policytemplate)
+	if err != nil {
+		panic(err)
+	}
+	var doc bytes.Buffer
+	err = tmpl.Execute(&doc, context)
+	//policyrules := fmt.Sprintf(policytemplate, vaultpath, pod.Namespace, deploymentConfig)
+	policyrules := doc.String()
 
 	if policycontent, err := client.Sys().GetPolicy(policyname); err != nil || policycontent == "" {
 		log.Debugf("creating standard vault policy: %s", policyname)

@@ -22,7 +22,7 @@ var globals struct {
 func podCreated(obj interface{}) {
 	pod := obj.(*apiv1.Pod)
 
-	if _, ok := pod.GetAnnotations()["mlctech.io/vault-initialized"]; ok {
+	if _, ok := pod.GetAnnotations()[fmt.Sprintf("%s/%s", *annotationPrefix, "vault-initialized")]; ok {
 		log.Infof("pod '%s' already annotated", pod.Name)
 		return
 	}
@@ -30,7 +30,7 @@ func podCreated(obj interface{}) {
 	if dc, ok := pod.GetAnnotations()["openshift.io/deployment-config.name"]; ok {
 		log.Infof("pod '%s' from DeploymentConfig '%s' created", pod.Name, dc)
 
-		policyname, _, err := createVaultStandardPolicy(globals.vaultclient, *vaultMount, pod.Namespace, dc)
+		policyname, policybasepath, err := createVaultStandardPolicy(globals.vaultclient, *vaultMount, pod)
 		if err != nil {
 			log.Warnf("failed to create standard vault policy: %v.", err)
 		}
@@ -57,17 +57,24 @@ func podCreated(obj interface{}) {
 			return
 		}
 
-		applyUpdate := func(updpod *apiv1.Pod, roleID string, secretID string) {
+		applyUpdate := func(updpod *apiv1.Pod, namespace string, annotations map[string]string) {
 			if updpod.Annotations == nil {
 				updpod.Annotations = map[string]string{}
 			}
-			updpod.Annotations["mlctech.io/vault-role-id"] = roleID
-			updpod.Annotations["mlctech.io/vault-secret-id"] = secretID
-			updpod.Annotations["mlctech.io/vault-initialized"] = "true"
+			for k, v := range annotations {
+				updpod.Annotations[fmt.Sprintf("%s/%s", namespace, k)] = v
+			}
 		}
 
 		log.Infof("annotating pod '%vs", pod.Name)
-		if pod, err = updatePodWithRetries(pod.Namespace, pod, roleID, secretID, applyUpdate); err != nil {
+		annotations := map[string]string{
+			"vault-role-id":     roleID,
+			"vault-secret-id":   secretID,
+			"vault-address":     globals.vaultclient.Address(),
+			"vault-secret-path": policybasepath,
+			"vault-initialized": "true",
+		}
+		if pod, err = updatePodWithRetries(pod.Namespace, pod, *annotationPrefix, annotations, applyUpdate); err != nil {
 			log.Errorf("failed to annotate pod. %v.", err)
 			return
 		}
@@ -93,14 +100,15 @@ var (
 
 // CLI Configuration
 var (
-	loglevel     = kingpin.Flag("loglevel", "Set logging level.").Short('l').Default("info").Enum("debug", "info", "warn", "crit", "panic")
-	incluster    = kingpin.Flag("incluster", "Enable if program is being run inside kubernetes/openshift").Short('i').Bool()
-	vaultMount   = kingpin.Flag("vaultpath", "Path on vault filesystem where secrets are located").Short('p').Required().OverrideDefaultFromEnvar("VAULTPATH").String()
-	kubeconfig   = kingpin.Flag("kubeconfig", "Absolute path to the kubeconfig file").Default(filepath.Join(homeDir(), ".kube", "config")).String()
-	selectednode = kingpin.Flag("node", "Only act on pods scheduled on the specificed kubernetes node").Short('n').OverrideDefaultFromEnvar("NODESELECTOR").String()
-	tlscert      = kingpin.Flag("tlscert", "TLS Client Certificate file for authentication").OverrideDefaultFromEnvar("TLSCERT").ExistingFile()
-	tlskey       = kingpin.Flag("tlskey", "TLS Client Key file for authentication").OverrideDefaultFromEnvar("TLSKEY").ExistingFile()
-	pkiauthpath  = kingpin.Flag("pkiauthpath", "Path of the PKI authentication backend on vault").Default("auth/cert").String()
+	loglevel         = kingpin.Flag("loglevel", "Set logging level.").Short('l').Default("info").Enum("debug", "info", "warn", "crit", "panic")
+	incluster        = kingpin.Flag("incluster", "Enable if program is being run inside kubernetes/openshift").Short('i').Bool()
+	vaultMount       = kingpin.Flag("vaultpath", "Path on vault filesystem where secrets are located").Short('p').Required().OverrideDefaultFromEnvar("VAULTPATH").String()
+	kubeconfig       = kingpin.Flag("kubeconfig", "Absolute path to the kubeconfig file").Default(filepath.Join(homeDir(), ".kube", "config")).String()
+	selectednode     = kingpin.Flag("node", "Only act on pods scheduled on the specificed kubernetes node").Short('n').OverrideDefaultFromEnvar("NODESELECTOR").String()
+	tlscert          = kingpin.Flag("tlscert", "TLS Client Certificate file for authentication").OverrideDefaultFromEnvar("TLSCERT").ExistingFile()
+	tlskey           = kingpin.Flag("tlskey", "TLS Client Key file for authentication").OverrideDefaultFromEnvar("TLSKEY").ExistingFile()
+	pkiauthpath      = kingpin.Flag("pkiauthpath", "Path of the PKI authentication backend on vault").Default("auth/cert").String()
+	annotationPrefix = kingpin.Flag("prefix", "Prefix for Pod annotations").Default("mlctech.io").String()
 )
 
 func main() {

@@ -42,19 +42,19 @@ func watchForNewPods(client *kubernetes.Clientset, store cache.Store, selectedno
 	return eStore
 }
 
-type updatePodFunc func(controller *apiv1.Pod, role string, secret string)
+type updatePodFunc func(controller *apiv1.Pod, prefix string, annotations map[string]string)
 
 // updatePodWithRetries retries updating the given pod on conflict with the following steps:
 // 1. Get latest resource
 // 2. applyUpdate
 // 3. Update the resource
-func updatePodWithRetries(namespace string, pod *apiv1.Pod, roleID string, secretID string, applyUpdate updatePodFunc) (*apiv1.Pod, error) {
+func updatePodWithRetries(namespace string, pod *apiv1.Pod, prefix string, annotations map[string]string, applyUpdate updatePodFunc) (*apiv1.Pod, error) {
 	// Deep copy the pod in case we failed on Get during retry loop
 	oldPod := pod.DeepCopy()
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() (e error) {
 		// Apply the update, then attempt to push it to the apiserver.
 
-		applyUpdate(pod, roleID, secretID)
+		applyUpdate(pod, prefix, annotations)
 
 		if pod, e = globals.clientset.CoreV1().Pods(namespace).Update(pod); e == nil {
 			return

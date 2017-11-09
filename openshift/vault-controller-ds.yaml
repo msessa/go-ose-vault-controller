@@ -1,0 +1,49 @@
+apiVersion: extensions/v1beta1
+kind: DaemonSet
+metadata:
+  name: vault-controller
+spec:
+  selector:
+    matchLabels:
+      name: vault-controller
+  template:
+    metadata:
+      labels:
+        name: vault-controller
+    spec:
+      volumes:
+        - name: openshift-nodeconfdir
+          hostPath:
+            path: /var/lib/origin/openshift.local.config/node-localhost/
+      containers:
+        - name: vault-controller
+          image: engineering-docker-registry-public.artifactory.mlctech.io/go-ose-vault-controller:latest
+          args:
+            - /vault-controller
+            - --incluster
+            - --loglevel=debug
+          env:
+            - name: VAULT_ADDR
+              value: 'https://vaultnp.mlctech.io'
+            - name: VAULTPATH
+              value: 'osenp'
+            - name: NODESELECTOR
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: TLSCERT
+              value: '/conf/master-client.crt'
+            - name: TLSKEY
+              value: '/conf/master-client.key'
+          volumeMounts:
+            - name: openshift-nodeconfdir
+              mountPath: /conf
+          terminationMessagePath: /dev/termination-log
+          imagePullPolicy: Always
+          securityContext:
+            privileged: false
+            runAsUser: 0
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      serviceAccount: vault-controller
+      serviceAccountName: vault-controller

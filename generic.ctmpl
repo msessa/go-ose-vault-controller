@@ -1,8 +1,10 @@
-{{ with secret (env "VAULT_DC_SECRET_PATH") }}
+{{ range $secretpath := (env "VAULT_DC_SECRET_PATHS" | split ",") -}}
+{{ with secret $secretpath }}
 {{- range $item := .Data }}
-{{- executeTemplate "logic" $item | trimSpace -}}
+{{- executeTemplate "logic" $item | trimSpace | saveToFile (scratch.Get "filedest") "0600" -}}
 {{ end }}{{/* end range */}}
 {{ end }}{{/* end with secret */}}
+{{- end }}{{/* end range */}}
 {{- define "java_properties" }}
 {{ range $k, $v := . -}}
 {{ $k }}={{ $v }}
@@ -15,7 +17,7 @@
 {{ . | toJSONPretty }}
 {{ end }}{{/* end define json */}}
 {{- define "logic" }}
-{{ scratch.Set "foo" .destination }}
+{{ scratch.Set "filedest" .destination }}
 {{ if eq .type "kv" }}
 {{ if .template }}
 {{ executeTemplate .template .contents }}
